@@ -1,0 +1,25 @@
+{
+  "name": "CCNA Lab Notebook",
+  "short_name": "CCNA Lab",
+  "description": "CCNA 200-301 study companion: 63-day tracker, drills, exam simulator, flashcards",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0B141D",
+  "theme_color": "#0B141D",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
