@@ -1584,7 +1584,7 @@ function renderDay(){
     <button class="btn" ${n===1?'disabled':''} onclick="openDay(${n-1})">← Day ${n-1}</button>
     <button class="btn" ${n===63?'disabled':''} onclick="openDay(${n+1})">Day ${n+1} →</button></div>`;
 }
-// tracker rows: replace the drill button with a notes button leading to the day page
+// tracker rows: add drill button + notes button on each day row
 const renderCourse2=renderCourse;
 renderCourse=function(){
   renderCourse2();
@@ -1594,8 +1594,19 @@ renderCourse=function(){
     const numEl=row.querySelector(".day-num");
     if(!numEl)return;
     const n=parseInt(numEl.textContent.replace("Day",""));
-    const drill=row.querySelector("button.day-link");
-    if(drill){drill.textContent="✎ notes";drill.onclick=e=>{e.stopPropagation();openDay(n);};}
+    const d=(row.querySelector(".pill")||{}).textContent?.trim().toLowerCase()||"";
+    const orig=row.querySelector("button.day-link");
+    if(orig){
+      // turn existing button into "drill"
+      orig.textContent="⚡ drill";
+      orig.onclick=e=>{e.stopPropagation();startPractice(d);};
+      // insert "notes" button after it
+      const nb=document.createElement("button");
+      nb.className="day-link";nb.style.background="none";
+      nb.textContent="✎ notes";
+      nb.onclick=e=>{e.stopPropagation();openDay(n);};
+      orig.after(nb);
+    }
   });
 };
 // dashboard next-up: "read the notes" goes straight to the day page
