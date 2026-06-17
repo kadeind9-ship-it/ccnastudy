@@ -999,16 +999,27 @@ function renderPractice(){
     return;
   }
   const st=practiceState;
+  // Strict day-only drill with no tagged questions yet.
+  if(st.day&&st.pool.length===0){
+    const ct=COURSE.find(c=>c[0]===st.day);
+    main.innerHTML=`<div class="prompt">CCNA-LAB# <b>show drill day ${st.day}</b></div><h1>Day ${st.day}${ct?` — ${ct[1]}`:""}</h1>
+    <div class="card" style="text-align:center;padding:34px">
+    <p style="color:var(--ink-soft)">No drill questions are tagged to this day yet. Read the day's notes, or drill the whole ${ct?dom(ct[2]).name:"module"} instead.</p>
+    <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+    ${ct?`<button class="btn" onclick="openDay(${st.day})">✎ Day ${st.day} notes</button><button class="btn" onclick="startPractice('${ct[2]}')">Drill ${dom(ct[2]).name}</button>`:""}
+    <button class="btn" onclick="practiceState=null;render()">Quiz builder</button></div></div>`;return;
+  }
   if(st.idx>=st.pool.length){
     const pc=Math.round(st.right/st.pool.length*100);
-    main.innerHTML=`<div class="prompt">CCNA-LAB# <b>show drill summary</b></div><h1>Quiz complete</h1>
+    const ct=st.day?COURSE.find(c=>c[0]===st.day):null;
+    main.innerHTML=`<div class="prompt">CCNA-LAB# <b>show drill summary</b></div><h1>${st.day?`Day ${st.day} drill complete`:"Quiz complete"}</h1>
     <div class="card" style="text-align:center;padding:34px"><div class="bignum" style="color:${pc>=85?'var(--green-deep)':pc>=60?'var(--amber-deep)':'var(--red-deep)'}">${pc}%</div>
     <p style="color:var(--ink-soft);margin-top:6px">${st.right} of ${st.pool.length} correct · ${pc>=85?"up/up — keep moving":pc>=60?"line protocol flapping — review and rerun":"interface down — back to the notes"}</p>
-    <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap"><button class="btn primary" onclick="buildQuiz()">Run again</button><button class="btn" onclick="practiceState=null;render()">Quiz builder</button></div></div>`;return;
+    <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">${st.day?`<button class="btn primary" onclick="startPracticeDay(${st.day})">Drill Day ${st.day} again</button>${ct?`<button class="btn" onclick="openDay(${st.day})">✎ Day notes</button>`:""}`:`<button class="btn primary" onclick="buildQuiz()">Run again</button>`}<button class="btn" onclick="practiceState=null;render()">Quiz builder</button></div></div>`;return;
   }
   const {q,i:qi}=st.pool[st.idx],d=dom(q.d),locked=st.picked!==null;
   main.innerHTML=`
-  <div class="qmeta"><span class="pill" style="background:${cv(C[d.color][1])};color:${cv(C[d.color][2])}">${d.name}</span>
+  <div class="qmeta"><span class="pill" style="background:${cv(C[d.color][1])};color:${cv(C[d.color][2])}">${st.day?`Day ${st.day} · `:""}${d.name}</span>
   <span style="display:flex;gap:8px;align-items:center"><span style="font-family:var(--mono);font-size:12px;color:var(--ink-faint)">${st.idx+1} / ${st.pool.length} · ${st.right} ✓</span>
   <button class="markbtn ${S.marks[qi]?'on':''}" onclick="toggleMark(${qi})" aria-label="Bookmark this question" title="Bookmark">⚑</button></span></div>
   <div class="bar" style="margin-bottom:18px"><i style="width:${Math.round(st.idx/st.pool.length*100)}%;background:var(--blue)"></i></div>
@@ -1578,7 +1589,8 @@ function renderDay(){
     <span class="pill" style="background:var(--blue-soft);color:var(--blue-deep)">video on Jeremy's playlist</span></div>
   <div class="card notes">${DAYNOTES[n]||'<p style="color:var(--ink-soft)">Notes coming soon.</p>'}</div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
-    <button class="btn primary" onclick="startPractice('${did}')">Drill ${d.name.replace(/^\d\.\d /,'')}</button>
+    <button class="btn primary" onclick="startPracticeDay(${n})">Drill Day ${n}${dayQCount(n)?` (${dayQCount(n)}q)`:""}</button>
+    <button class="btn" onclick="startPractice('${did}')">Drill ${d.name.replace(/^\d\.\d /,'')}</button>
     <button class="btn" onclick="startFlash('${did}')">Flashcards</button></div>
   <div style="display:flex;justify-content:space-between;margin-top:22px">
     <button class="btn" ${n===1?'disabled':''} onclick="openDay(${n-1})">← Day ${n-1}</button>
@@ -1594,11 +1606,10 @@ renderCourse=function(){
     const numEl=row.querySelector(".day-num");
     if(!numEl)return;
     const n=parseInt(numEl.textContent.replace("Day",""));
-    const d=(row.querySelector(".pill")||{}).textContent?.trim().toLowerCase()||"";
     const orig=row.querySelector("button.day-link");
     if(orig){
       orig.textContent="⚡ drill";
-      orig.onclick=e=>{e.stopPropagation();startPractice(d);};
+      orig.onclick=e=>{e.stopPropagation();startPracticeDay(n);};
       const nb=document.createElement("button");
       nb.className="day-link";nb.style.background="none";
       nb.textContent="✎ notes";
@@ -1989,6 +2000,38 @@ QB.push(...QB3);
 QB.push(
 {d:"nf",q:"PC-B (VLAN 20) replies to PC-A (VLAN 10) through an L3 switch that is its gateway. On the leg from PC-B to the gateway, what is the destination MAC?",c:["PC-A's MAC","The VLAN 20 gateway interface's MAC","Broadcast FFFF.FFFF.FFFF","PC-B's own MAC"],a:1,e:"PC-A is off-subnet from PC-B, so PC-B frames its reply to its own default gateway (the VLAN 20 interface), exactly as PC-A did outbound. The data is unicast to the gateway — never a broadcast."},
 {d:"nf",q:"During an inter-VLAN exchange between two hosts, which statement is always true across all four legs (request out, request in, reply out, reply in)?",c:["The destination MAC stays the same","The source and destination IPs stay the same (only swapping for the reply)","Every frame is broadcast","The TTL never changes"],a:1,e:"IPs are end-to-end: PC-A and PC-B's IPs are constant, merely swapping source/destination for the reply direction. MACs are rewritten every leg to the next hop, and TTL drops by 1 at each router hop."});
+// ===== PER-DAY QUESTION TAGGING (strict day-only drills) =====
+// Maps every QB question (by assembled order) to the Jeremy's IT Lab day it belongs to.
+const QDAYS=[
+3,3,13,13,13,7,31,31,32,31,
+30,30,30,5,2,52,55,5,54,54,
+16,20,20,21,20,17,17,23,23,56,
+56,36,36,46,22,19,17,56,21,23,
+24,11,24,11,11,26,26,26,27,27,
+26,26,11,33,33,29,29,29,29,18,
+18,11,12,26,27,45,44,39,39,37,
+41,40,47,47,42,49,49,50,51,48,
+48,48,34,34,34,35,57,57,48,48,
+60,62,62,61,61,63,63,60,62,63,
+14,14,15,13,15,14,14,15,20,21,
+20,22,21,20,26,27,28,26,27,28,
+28,27,16,17,19,17,17,46,31,32,
+31,31,33,11,11,11,11,12,29,55,
+56,57,56,50,37,41,45,47,49,48,
+48,48,61,60,63,12,12
+];
+if(QDAYS.length===QB.length){QB.forEach((q,i)=>{q.dy=QDAYS[i];});}
+else{console.warn("QDAYS length",QDAYS.length,"!= QB length",QB.length,"— day tags skipped");}
+// Strict day-only drill: only this day's questions, nothing else.
+window.startPracticeDay=n=>{
+  view="practice";
+  const pool=QB.map((q,i)=>({q,i})).filter(x=>x.q.dy===n);
+  shuffle(pool);
+  practiceState={pool,idx:0,picked:null,right:0,domain:null,day:n};
+  render();
+};
+// How many questions a given day has (for tracker row counts, if wanted).
+window.dayQCount=n=>QB.reduce((a,q)=>a+(q.dy===n?1:0),0);
 // ===== nav wiring for command reference =====
 ICONS.cmds='<path d="M4 17l6-5-6-5M12 19h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
 function renderNav(){
@@ -2556,7 +2599,8 @@ function renderDay(){
     <button class="${dayTab==='notes'?'on':''}" onclick="setDayTab('notes')">⚡ Quick notes</button></div>`:''}
   ${body}
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
-    <button class="btn primary" onclick="startPractice('${did}')">Drill this topic</button>
+    <button class="btn primary" onclick="startPracticeDay(${n})">Drill Day ${n}${dayQCount(n)?` (${dayQCount(n)}q)`:""}</button>
+    <button class="btn" onclick="startPractice('${did}')">Drill this topic</button>
     <button class="btn" onclick="startFlash('${did}')">Flashcards</button></div>
   <div style="display:flex;justify-content:space-between;margin-top:22px">
     <button class="btn" ${n===1?'disabled':''} onclick="openDay(${n-1})">← Day ${n-1}</button>
