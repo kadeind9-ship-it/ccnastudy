@@ -1597,10 +1597,8 @@ renderCourse=function(){
     const d=(row.querySelector(".pill")||{}).textContent?.trim().toLowerCase()||"";
     const orig=row.querySelector("button.day-link");
     if(orig){
-      // turn existing button into "drill"
       orig.textContent="⚡ drill";
       orig.onclick=e=>{e.stopPropagation();startPractice(d);};
-      // insert "notes" button after it
       const nb=document.createElement("button");
       nb.className="day-link";nb.style.background="none";
       nb.textContent="✎ notes";
@@ -1987,6 +1985,10 @@ const QB3=[
 {d:"ap",q:"A team wants to provision cloud network infrastructure declaratively and track current state vs desired state. Best-fit tool?",c:["Ansible","Terraform","Syslog","SNMP"],a:1,e:"Declarative + state file + provisioning = Terraform; Ansible is procedural-ish config management of existing systems."}
 ];
 QB.push(...QB3);
+// inter-VLAN round-trip framing (reply-leg focus)
+QB.push(
+{d:"nf",q:"PC-B (VLAN 20) replies to PC-A (VLAN 10) through an L3 switch that is its gateway. On the leg from PC-B to the gateway, what is the destination MAC?",c:["PC-A's MAC","The VLAN 20 gateway interface's MAC","Broadcast FFFF.FFFF.FFFF","PC-B's own MAC"],a:1,e:"PC-A is off-subnet from PC-B, so PC-B frames its reply to its own default gateway (the VLAN 20 interface), exactly as PC-A did outbound. The data is unicast to the gateway — never a broadcast."},
+{d:"nf",q:"During an inter-VLAN exchange between two hosts, which statement is always true across all four legs (request out, request in, reply out, reply in)?",c:["The destination MAC stays the same","The source and destination IPs stay the same (only swapping for the reply)","Every frame is broadcast","The TTL never changes"],a:1,e:"IPs are end-to-end: PC-A and PC-B's IPs are constant, merely swapping source/destination for the reply direction. MACs are rewritten every leg to the next hop, and TTL drops by 1 at each router hop."});
 // ===== nav wiring for command reference =====
 ICONS.cmds='<path d="M4 17l6-5-6-5M12 19h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
 function renderNav(){
@@ -3121,6 +3123,446 @@ Object.assign(LESSONS,{
 <h3>You've reached the end</h3>
 <p>That completes the CCNA topic map. From here it's consolidation: drill questions to find weak spots, run the labs until configuration is automatic, take timed exams until you consistently pass, and keep the subnetting and command reflexes sharp. The knowledge is all here — now it's repetition and practice that carry you to exam day.</p>`
 });
+</script>
+<style>
+.cli-input{width:100%;padding:13px 15px;border-radius:9px;font-size:15px;font-family:var(--mono);background:var(--console);color:var(--console-green);border:1px solid #27455F;outline:none}
+.cli-input:focus{border-color:var(--blue)}
+.cli-prompt-row{display:flex;align-items:center;gap:8px;background:var(--console);border:1px solid #27455F;border-radius:9px;padding:0 0 0 14px}
+.cli-prompt-row .pfx{font-family:var(--mono);color:var(--console-green);font-size:14px;white-space:nowrap}
+.cli-prompt-row input{flex:1;background:none;border:none;outline:none;color:var(--console-text);font-family:var(--mono);font-size:15px;padding:13px 14px 13px 4px}
+.accepted{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);background:#0E1A26;border:1px solid var(--line);border-radius:7px;padding:8px 11px;margin-top:6px;display:inline-block}
+</style>
+<script>
+// ===== CLI CHALLENGE — type the Cisco command from memory =====
+// answers[] holds acceptable canonical forms; matching is forgiving:
+//   case-insensitive, whitespace-collapsed, abbreviations OK (each typed token must be a
+//   prefix of the corresponding answer token), and value tokens (<ip>,<vlan>,<name> etc.) accept any plausible value.
+const CLIQ=[
+{d:"Basics",q:"Enter privileged EXEC mode from user EXEC.",a:["enable"]},
+{d:"Basics",q:"Enter global configuration mode.",a:["configure terminal"]},
+{d:"Basics",q:"Save the running configuration so it survives a reload.",a:["copy running-config startup-config","write memory","write"]},
+{d:"Basics",q:"Set the device hostname to SW1.",a:["hostname <name>"]},
+{d:"Basics",q:"Set a hashed privileged-mode (enable) password.",a:["enable secret <x>"]},
+{d:"Basics",q:"Stop the device from trying to DNS-resolve mistyped commands.",a:["no ip domain-lookup"]},
+{d:"Basics",q:"Show the full active configuration.",a:["show running-config"]},
+{d:"Basics",q:"Return directly to privileged EXEC from a sub-config mode (one command).",a:["end"]},
+{d:"Interfaces",q:"Assign IP 10.0.0.1/24 to the current interface.",a:["ip address 10.0.0.1 255.255.255.0"]},
+{d:"Interfaces",q:"Enable an interface that is administratively down.",a:["no shutdown"]},
+{d:"Interfaces",q:"Show every interface with its IP and up/down status in one screen.",a:["show ip interface brief"]},
+{d:"Interfaces",q:"Hardcode an interface to 100 Mbps, full duplex (two commands).",a:["speed 100","duplex full"]},
+{d:"VLANs",q:"Create VLAN 10.",a:["vlan 10"]},
+{d:"VLANs",q:"Make the current port an access port in VLAN 10 (two commands).",a:["switchport mode access","switchport access vlan 10"]},
+{d:"VLANs",q:"Add a voice VLAN 20 to the current access port.",a:["switchport voice vlan 20"]},
+{d:"VLANs",q:"Hardcode the current port as an 802.1Q trunk.",a:["switchport mode trunk"]},
+{d:"VLANs",q:"Set the trunk native VLAN to 999.",a:["switchport trunk native vlan 999"]},
+{d:"VLANs",q:"Add VLAN 30 to a trunk WITHOUT removing the others.",a:["switchport trunk allowed vlan add 30"]},
+{d:"VLANs",q:"Disable DTP negotiation on a port.",a:["switchport nonegotiate"]},
+{d:"VLANs",q:"Show all VLANs and their assigned access ports.",a:["show vlan brief"]},
+{d:"VLANs",q:"Show trunk status, native VLAN, and allowed VLANs.",a:["show interfaces trunk"]},
+{d:"Inter-VLAN",q:"On a router subinterface, tag it for VLAN 10.",a:["encapsulation dot1q 10"]},
+{d:"Inter-VLAN",q:"Enable routing on a multilayer switch.",a:["ip routing"]},
+{d:"Inter-VLAN",q:"Convert a switch port into a routed Layer 3 port.",a:["no switchport"]},
+{d:"STP",q:"Make this switch the root bridge for VLAN 10 (one common command).",a:["spanning-tree vlan 10 root primary"]},
+{d:"STP",q:"Enable PortFast on the current access port.",a:["spanning-tree portfast"]},
+{d:"STP",q:"Enable BPDU Guard on the current port.",a:["spanning-tree bpduguard enable"]},
+{d:"STP",q:"Show spanning tree details for VLAN 10.",a:["show spanning-tree vlan 10"]},
+{d:"EtherChannel",q:"Bundle the current ports into channel-group 1 using LACP active mode.",a:["channel-group 1 mode active"]},
+{d:"EtherChannel",q:"Show EtherChannel bundle status.",a:["show etherchannel summary"]},
+{d:"Routing",q:"Add a static route to 10.2.0.0/24 via next hop 192.168.1.2.",a:["ip route 10.2.0.0 255.255.255.0 192.168.1.2"]},
+{d:"Routing",q:"Add a default route via 203.0.113.1.",a:["ip route 0.0.0.0 0.0.0.0 203.0.113.1"]},
+{d:"Routing",q:"Show the full routing table.",a:["show ip route"]},
+{d:"OSPF",q:"Start OSPF process 1.",a:["router ospf 1"]},
+{d:"OSPF",q:"Set the OSPF router-id to 1.1.1.1.",a:["router-id 1.1.1.1"]},
+{d:"OSPF",q:"Advertise network 10.0.0.0/24 into OSPF area 0 (network statement).",a:["network 10.0.0.0 0.0.0.255 area 0"]},
+{d:"OSPF",q:"Enable OSPF process 1 area 0 directly on the current interface.",a:["ip ospf 1 area 0"]},
+{d:"OSPF",q:"Stop sending OSPF hellos out interface g0/1 (from router config).",a:["passive-interface g0/1"]},
+{d:"OSPF",q:"Show OSPF neighbor adjacencies.",a:["show ip ospf neighbor"]},
+{d:"FHRP",q:"Set the HSRP group 1 virtual IP to 10.0.0.254.",a:["standby 1 ip 10.0.0.254"]},
+{d:"FHRP",q:"Allow this HSRP router to take back the active role on recovery.",a:["standby 1 preempt"]},
+{d:"IPv6",q:"Enable IPv6 routing/forwarding globally.",a:["ipv6 unicast-routing"]},
+{d:"IPv6",q:"Add IPv6 address 2001:db8:0:1::1/64 to the current interface.",a:["ipv6 address 2001:db8:0:1::1/64"]},
+{d:"IPv6",q:"Show the IPv6 neighbor (NDP) table.",a:["show ipv6 neighbors"]},
+{d:"ACLs",q:"Create/enter a named extended ACL called BLOCK-WEB.",a:["ip access-list extended <name>"]},
+{d:"ACLs",q:"Apply ACL BLOCK-WEB inbound on the current interface.",a:["ip access-group <name> in"]},
+{d:"ACLs",q:"Restrict vty access using access list 10 inbound.",a:["access-class 10 in"]},
+{d:"ACLs",q:"Show all configured access lists with hit counters.",a:["show access-lists"]},
+{d:"NAT",q:"Configure PAT overloading the inside hosts in ACL 1 out interface g0/1.",a:["ip nat inside source list 1 interface g0/1 overload"]},
+{d:"NAT",q:"Mark the current interface as the NAT inside interface.",a:["ip nat inside"]},
+{d:"NAT",q:"Show the active NAT translation table.",a:["show ip nat translations"]},
+{d:"DHCP",q:"Create a DHCP pool named LAN.",a:["ip dhcp pool <name>"]},
+{d:"DHCP",q:"Relay DHCP from this interface to a server at 10.5.5.10.",a:["ip helper-address 10.5.5.10"]},
+{d:"DHCP",q:"Show current DHCP lease bindings.",a:["show ip dhcp binding"]},
+{d:"Services",q:"Point the device at NTP server 10.1.1.100.",a:["ntp server 10.1.1.100"]},
+{d:"Services",q:"Send syslog messages to a server at 10.1.1.50.",a:["logging host 10.1.1.50"]},
+{d:"Services",q:"Send syslog severity warnings (level 4) and above to the server.",a:["logging trap warnings","logging trap 4"]},
+{d:"SSH",q:"Set the IP domain name to lab.local (an SSH prerequisite).",a:["ip domain-name <name>"]},
+{d:"SSH",q:"Generate a 2048-bit RSA key pair for SSH.",a:["crypto key generate rsa modulus 2048","crypto key generate rsa"]},
+{d:"SSH",q:"Allow only SSH (not Telnet) on the current vty lines.",a:["transport input ssh"]},
+{d:"SSH",q:"Tell the vty lines to authenticate against local user accounts.",a:["login local"]},
+{d:"Security",q:"Enable port security on the current access port.",a:["switchport port-security"]},
+{d:"Security",q:"Limit the port to a maximum of 2 MAC addresses.",a:["switchport port-security maximum 2"]},
+{d:"Security",q:"Make the port sticky-learn its MAC addresses.",a:["switchport port-security mac-address sticky"]},
+{d:"Security",q:"Set the port-security violation mode to restrict.",a:["switchport port-security violation restrict"]},
+{d:"Security",q:"Enable DHCP snooping globally.",a:["ip dhcp snooping"]},
+{d:"Security",q:"Trust the current interface for DHCP snooping.",a:["ip dhcp snooping trust"]},
+{d:"Security",q:"Enable dynamic ARP inspection on VLAN 10.",a:["ip arp inspection vlan 10"]},
+{d:"Security",q:"Show port-security status for interface f0/1.",a:["show port-security interface f0/1"]},
+{d:"Troubleshooting",q:"Test reachability to 10.0.0.1.",a:["ping 10.0.0.1"]},
+{d:"Troubleshooting",q:"Trace the path to 10.0.0.1.",a:["traceroute 10.0.0.1"]},
+{d:"Troubleshooting",q:"Show directly connected Cisco neighbors with IPs and platforms.",a:["show cdp neighbors detail"]},
+{d:"Troubleshooting",q:"Show the switch MAC address table.",a:["show mac address-table"]},
+{d:"Troubleshooting",q:"Show the router's ARP cache.",a:["show arp"]}
+];
+
+// ---- forgiving matcher ----
+function normCmd(s){return s.toLowerCase().replace(/\s+/g," ").trim();}
+const VALUE_TOKEN=/^(<.*>|\d+|\d+\.\d+\.\d+\.\d+|255\.\d+\.\d+\.\d+|0\.0\.0\.\d+|[0-9a-f:]+\/\d+|[0-9a-f:]+)$/i;
+function tokenIsValue(ans){return /^<.*>$/.test(ans);}
+function looksLikeValue(tok){return /\d/.test(tok)||/[:\/]/.test(tok);}
+function matchOne(input,answer){
+  const it=normCmd(input).split(" "), at=normCmd(answer).split(" ");
+  if(it.length!==at.length)return false;
+  for(let i=0;i<at.length;i++){
+    const a=at[i], t=it[i];
+    if(tokenIsValue(a)){ if(!t)return false; continue; } // placeholder accepts any non-empty token
+    // value-bearing answer token (ip/number/vlan): accept any plausible value of same shape
+    if(looksLikeValue(a)){ if(t!==a && !looksLikeValue(t))return false; continue; }
+    // otherwise allow abbreviation: typed token must be a prefix of the answer token
+    if(!a.startsWith(t)||t.length===0)return false;
+  }
+  return true;
+}
+function cliCorrect(input,answers){return answers.some(a=>matchOne(input,a));}
+
+S.game.best=S.game.best||{};
+let cli=null;
+function startCLI(dom){
+  let pool=CLIQ.map((q,i)=>({q,i})).filter(x=>!dom||x.q.d===dom);
+  shuffle(pool);
+  cli={pool,idx:0,score:0,streak:0,answered:false,lastOk:false,dom:dom||null};
+  view="cligame";render();
+  setTimeout(()=>{const el=document.getElementById("cliField");if(el)el.focus();},60);
+}
+window.startCLI=startCLI;
+window.cliSubmit=()=>{
+  if(!cli||cli.answered)return;
+  const el=document.getElementById("cliField"); if(!el)return;
+  const val=el.value; if(!val.trim())return;
+  const {q,i}=cli.pool[cli.idx];
+  const ok=cliCorrect(val,q.a);
+  cli.answered=true; cli.lastOk=ok; cli.lastInput=val;
+  if(ok){cli.score++;cli.streak++;bump();}else{cli.streak=0;}
+  renderCLI();
+};
+window.cliReveal=()=>{ // "I don't know" — counts as miss, shows answer (research-style: see it, move on)
+  if(!cli||cli.answered)return;
+  cli.answered=true;cli.lastOk=false;cli.lastInput=null;cli.streak=0;
+  renderCLI();
+};
+window.cliNext=()=>{
+  if(!cli)return;
+  cli.idx++; cli.answered=false; cli.lastOk=false; cli.lastInput=undefined;
+  if(cli.idx>=cli.pool.length){
+    const best=S.game.best.cli||0;
+    if(cli.score>best){S.game.best.cli=cli.score;saveState();}
+    renderCLI();return;
+  }
+  renderCLI();
+  setTimeout(()=>{const el=document.getElementById("cliField");if(el)el.focus();},60);
+};
+function renderCLI(){renderCLIInner();}
+function renderCLIInner(){
+  if(!cli){
+    const doms=[...new Set(CLIQ.map(q=>q.d))];
+    main.innerHTML=`<div class="prompt">CCNA-LAB# <b>cli-challenge start</b></div><h1>CLI Challenge</h1>
+    <p class="sub">Type the Cisco command from memory — just like the exam's simulation questions and the real job. Shortcuts accepted (<span class="chip">conf t</span>, <span class="chip">sh ip int br</span>). No multiple choice, no hints. ${S.game.best.cli?`Best run: ${S.game.best.cli}/${CLIQ.length}.`:''}</p>
+    <div class="toolbar"><button class="btn primary" onclick="startCLI(null)">⌨ Full set (${CLIQ.length})</button></div>
+    <div class="card"><h3 style="margin-top:0">Drill one area</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${doms.map(d=>`<span class="dchip" onclick="startCLI('${d}')" role="button" tabindex="0">${d} <span style="opacity:.6">${CLIQ.filter(q=>q.d===d).length}</span></span>`).join("")}</div></div>
+    <div class="card"><h3 style="margin-top:0">How grading works</h3>
+    <p style="font-size:13.5px;color:var(--ink-soft)">Case and extra spaces don't matter. Abbreviations are accepted as long as they're unambiguous (<span class="chip">conf t</span> = configure terminal). Where a command needs a value — an IP, a VLAN number, a name — any sensible value counts, so you're tested on the <i>command</i>, not on memorizing the lab's exact numbers. Stuck? Hit "Show answer" — it counts as a miss, but seeing it is how you learn. A real admin looks things up; the goal is that you need to less often.</p></div>`;
+    return;
+  }
+  if(cli.idx>=cli.pool.length){
+    const pct=Math.round(cli.score/cli.pool.length*100);
+    main.innerHTML=`<div class="qmeta"><button class="btn" onclick="cli=null;render()">← CLI menu</button></div>
+    <div class="card" style="text-align:center;padding:34px"><div class="bignum" style="color:${pct>=85?'var(--green-deep)':pct>=60?'var(--amber-deep)':'var(--red-deep)'}">${cli.score}/${cli.pool.length}</div>
+    <p style="color:var(--ink-soft);margin-top:6px">${pct}% recalled${S.game.best.cli===cli.score&&cli.score>0?' · 🏆 new best!':''}. ${pct>=85?'Your CLI recall is exam-ready.':pct>=60?'Solid — drill the ones you blanked on.':'Keep going — these come from repetition.'}</p>
+    <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap"><button class="btn primary" onclick="startCLI(${cli.dom?`'${cli.dom}'`:'null'})">Run again</button><button class="btn" onclick="cli=null;render()">CLI menu</button></div></div>`;
+    return;
+  }
+  const {q}=cli.pool[cli.idx];
+  let feedback="";
+  if(cli.answered){
+    const primary=q.a[0].replace(/<x>/g,"<value>");
+    if(cli.lastOk){
+      feedback=`<div class="expl"><b style="color:var(--green-deep)">✓ Correct.</b> Accepted: <span class="chip">${cli.lastInput.trim()}</span></div>`;
+    }else{
+      const got=cli.lastInput===null?'<i>(skipped)</i>':`<span class="chip" style="background:var(--red-soft);color:var(--red-deep)">${cli.lastInput.trim()}</span>`;
+      feedback=`<div class="expl bad"><b style="color:var(--red-deep)">✗ ${cli.lastInput===null?'Answer:':'Not quite.'}</b> ${cli.lastInput!==null?'You typed '+got+'. ':''}Correct command: <span class="accepted" style="margin-top:8px">${primary}</span>${q.a.length>1?`<div style="margin-top:6px;font-size:12px">Also accepted: ${q.a.slice(1).map(x=>`<span class="chip">${x}</span>`).join(" ")}</div>`:''}</div>`;
+    }
+  }
+  main.innerHTML=`
+  <div class="qmeta"><button class="btn" onclick="cli=null;render()">← CLI menu</button>
+  <span style="display:flex;gap:10px;align-items:center"><span class="combo">${cli.streak>1?'🔥 x'+cli.streak:''}</span><span style="font-family:var(--mono);font-size:13px;color:var(--ink-soft)">score ${cli.score} · ${cli.idx+1}/${cli.pool.length}</span></span></div>
+  <div class="bar" style="margin-bottom:18px"><i style="width:${Math.round(cli.idx/cli.pool.length*100)}%;background:var(--blue)"></i></div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:10px"><span class="pill" style="background:var(--blue-soft);color:var(--blue-deep)">${q.d}</span></div>
+    <p class="qtext" style="margin-bottom:14px">${q.q}</p>
+    <div class="cli-prompt-row"><span class="pfx">Device(config)#</span><input id="cliField" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="type the command…" ${cli.answered?'disabled':''} onkeydown="if(event.key==='Enter'){event.preventDefault(); ${cli.answered?'cliNext()':'cliSubmit()'};}"></div>
+    ${feedback}
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+    ${cli.answered
+      ? `<button class="btn primary" onclick="cliNext()">${cli.idx===cli.pool.length-1?'See results':'Next'} →</button>`
+      : `<button class="btn primary" onclick="cliSubmit()">Submit</button><button class="btn" onclick="cliReveal()">Show answer</button>`}
+    </div>
+  </div>
+  <p style="font-size:12px;color:var(--ink-faint);margin-top:10px;font-family:var(--mono)">Enter submits · shortcuts like "conf t" accepted · values (IPs, names) are flexible</p>`;
+}
+
+// ===== wire into Arcade =====
+const renderGames2=renderGames;
+renderGames=function(){
+  renderGames2();
+  const b=S.game.best;
+  const card=`<div class="card hoverable game-card" style="display:flex;gap:15px;align-items:center" onclick="startCLI(null)" role="button" tabindex="0">
+    <div class="game-ic" style="background:var(--purple-soft);color:var(--purple-deep)">⌨</div>
+    <div style="flex:1"><div style="font-weight:600;font-size:16px">CLI Challenge</div>
+    <p style="font-size:13px;color:var(--ink-soft)">Type Cisco commands from memory — exam-sim style, shortcuts accepted, no multiple choice. ${b.cli?`Best: ${b.cli}/${CLIQ.length}.`:'No best run yet.'}</p></div><span style="color:var(--ink-faint)">›</span></div>`;
+  main.insertAdjacentHTML("beforeend",card);
+};
+// route + reset on nav
+const _go4=window.go;
+window.go=v=>{cli=null;_go4(v);};
+const _render=render;
+render=function(){
+  if(view==="cligame"){renderNav();renderCLIInner();$("topStatus").textContent=`Interface Study0/1 is up, line protocol is up · ⚡${streakLive()}d · CLI`;return;}
+  _render();
+};
+render();
+</script>
+<style>
+.conf-area{width:100%;min-height:130px;padding:13px 15px;border-radius:9px;font-size:14px;font-family:var(--mono);background:var(--console);color:var(--console-green);border:1px solid #27455F;outline:none;line-height:1.7;resize:vertical;white-space:pre}
+.conf-area:focus{border-color:var(--blue)}
+.conf-line{display:flex;align-items:flex-start;gap:9px;padding:7px 10px;border-radius:7px;margin-bottom:5px;font-family:var(--mono);font-size:13px}
+.conf-line.hit{background:var(--green-soft);color:var(--green-deep)}
+.conf-line.miss{background:var(--red-soft);color:var(--red-deep)}
+.conf-line .mk{flex-shrink:0;font-weight:600}
+.conf-task{font-size:13.5px;color:var(--ink-soft);padding:5px 0 5px 18px;position:relative}
+.conf-task::before{content:"›";position:absolute;left:4px;color:var(--ink-faint)}
+.conf-task.got::before{content:"✓";color:var(--green)}
+.conf-task.got{color:var(--ink-faint);text-decoration:line-through}
+.confidence-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.cbtn{flex:1;min-width:90px;border:1px solid #27455F;background:#152636;border-radius:9px;padding:11px 8px;font-size:13px;color:var(--ink);cursor:pointer;text-align:center}
+.cbtn:hover{border-color:var(--blue)}
+.cbtn .em{display:block;font-size:17px;margin-bottom:2px}
+</style>
+<script>
+// ===== FEATURE 1: CONFIDENCE RATINGS =====
+// After answering a quiz question correctly, ask how sure they were.
+// "Lucky guess" correct answers are flagged for priority review.
+S.conf=S.conf||{};        // qi -> "knew" | "guess" | "lucky"  (lucky = guessed but got it right)
+function shakyIdx(){ // correct-but-not-confident, plus anything missed
+  const out=new Set(missedIdx());
+  for(const k in S.conf){ if(S.conf[k]==="lucky") out.add(+k); }
+  return [...out];
+}
+// hook into the practice flow: after pickAns locks an answer, show the confidence prompt
+let pendingConf=null; // {qi, correct}
+const _pickAns2=window.pickAns;
+window.pickAns=i=>{
+  const st=practiceState; if(!st||st.picked!==null)return;
+  _pickAns2(i);
+  const cur=st.pool[st.idx];
+  if(cur){
+    const correct=(i===cur.q.a);
+    if(correct){ pendingConf={qi:cur.i, correct:true}; renderPractice(); }
+    else { S.conf[cur.i]="guess"; saveState(); /* wrong = not confident; no prompt */ }
+  }
+};
+window.rateConf=(level)=>{
+  if(!pendingConf)return;
+  // store: if they knew it -> knew; if unsure but correct -> lucky (flag); if wrong -> guess
+  if(pendingConf.correct) S.conf[pendingConf.qi]= (level==="sure"?"knew":"lucky");
+  else S.conf[pendingConf.qi]="guess";
+  pendingConf=null; saveState(); renderPractice();
+};
+// re-render practice with a confidence prompt injected after feedback when pending
+const _renderPractice=renderPractice;
+renderPractice=function(){
+  _renderPractice();
+  if(pendingConf && practiceState && practiceState.picked!==null){
+    const card=main.querySelector(".card:last-of-type");
+    // hide the Next button while rating, then show the rating prompt
+    const nextBtns=main.querySelectorAll("button");
+    nextBtns.forEach(b=>{if(/Next question|Finish drill/.test(b.textContent))b.style.display="none";});
+    if(card){
+      card.insertAdjacentHTML("beforeend",
+        `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
+        <p style="font-size:13px;color:var(--ink-soft);margin-bottom:4px">How sure were you?</p>
+        <div class="confidence-row">
+          <button class="cbtn" onclick="rateConf('sure')"><span class="em">💪</span>Knew it</button>
+          <button class="cbtn" onclick="rateConf('unsure')"><span class="em">🤔</span>Wasn't sure</button>
+        </div></div>`);
+    }
+  }
+};
+// ===== FEATURE 3: BUILD-THE-CONFIG CHALLENGES =====
+// Scenario + topology; you type the WHOLE multi-line config; graded line-by-line with the forgiving matcher.
+const CONFIGS=[
+{t:"Name & secure a switch",d:"sf",lvl:1,
+scenario:"A factory-fresh switch needs basic identity and a secure enable password before you go further.",
+tasks:["Set the hostname to SW1","Set a hashed enable password","Save the configuration"],
+sol:["hostname SW1","enable secret <x>","copy running-config startup-config"]},
+{t:"Access port in a VLAN",d:"na",lvl:1,
+scenario:"Port f0/1 must connect a PC in the SALES VLAN (VLAN 10), which doesn't exist yet.",
+tasks:["Create VLAN 10","Name it SALES","Enter interface f0/1","Make it an access port","Place it in VLAN 10"],
+sol:["vlan 10","name SALES","interface f0/1","switchport mode access","switchport access vlan 10"]},
+{t:"Build a trunk",d:"na",lvl:2,
+scenario:"Link g0/1 between two switches must carry VLANs 10 and 20 as an 802.1Q trunk with native VLAN 999, DTP off.",
+tasks:["Enter interface g0/1","Hardcode it as a trunk","Set native VLAN 999","Allow only VLANs 10 and 20","Disable DTP negotiation"],
+sol:["interface g0/1","switchport mode trunk","switchport trunk native vlan 999","switchport trunk allowed vlan 10,20","switchport nonegotiate"]},
+{t:"Router-on-a-stick subinterface",d:"na",lvl:2,
+scenario:"R1 g0/0 must route VLAN 10 (gateway 10.0.10.1/24) via a subinterface.",
+tasks:["Enter subinterface g0/0.10","Tag it for VLAN 10","Assign the gateway IP 10.0.10.1/24"],
+sol:["interface g0/0.10","encapsulation dot1q 10","ip address 10.0.10.1 255.255.255.0"]},
+{t:"Bring up a routed interface",d:"ipc",lvl:1,
+scenario:"R1 g0/0 connects a LAN and needs 10.0.0.1/24. It's currently shut down.",
+tasks:["Enter interface g0/0","Assign IP 10.0.0.1/24","Enable the interface"],
+sol:["interface g0/0","ip address 10.0.0.1 255.255.255.0","no shutdown"]},
+{t:"Default + static route",d:"ipc",lvl:2,
+scenario:"R1 must reach 10.2.0.0/24 via 192.168.1.2 and send everything else to the ISP at 203.0.113.1.",
+tasks:["Static route to 10.2.0.0/24 via 192.168.1.2","Default route via 203.0.113.1"],
+sol:["ip route 10.2.0.0 255.255.255.0 192.168.1.2","ip route 0.0.0.0 0.0.0.0 203.0.113.1"]},
+{t:"Single-area OSPF",d:"ipc",lvl:2,
+scenario:"R1 (router-id 1.1.1.1) runs OSPF process 1, advertising 10.0.0.0/24 in area 0, with g0/1 (the LAN) passive.",
+tasks:["Start OSPF process 1","Set router-id 1.1.1.1","Advertise 10.0.0.0/24 into area 0","Make g0/1 passive"],
+sol:["router ospf 1","router-id 1.1.1.1","network 10.0.0.0 0.0.0.255 area 0","passive-interface g0/1"]},
+{t:"HSRP gateway",d:"ipc",lvl:2,
+scenario:"On R1 g0/0, configure HSRP group 1 with virtual IP 10.0.0.254, priority 110, and preemption.",
+tasks:["Enter interface g0/0","Set HSRP group 1 virtual IP 10.0.0.254","Set priority 110","Enable preemption"],
+sol:["interface g0/0","standby 1 ip 10.0.0.254","standby 1 priority 110","standby 1 preempt"]},
+{t:"PAT to the internet",d:"ips",lvl:3,
+scenario:"Overload the inside LAN 10.0.0.0/24 behind interface g0/1. ACL 1 will match the inside hosts; g0/0 is inside, g0/1 is outside.",
+tasks:["ACL 1 permitting 10.0.0.0/24","Configure PAT overloading out g0/1","Mark g0/0 as NAT inside","Mark g0/1 as NAT outside"],
+sol:["access-list 1 permit 10.0.0.0 0.0.0.255","ip nat inside source list 1 interface g0/1 overload","interface g0/0","ip nat inside","interface g0/1","ip nat outside"]},
+{t:"DHCP pool + relay",d:"ips",lvl:2,
+scenario:"R1 serves DHCP for 10.0.0.0/24 (gateway 10.0.0.1, DNS 8.8.8.8) and excludes .1–.10.",
+tasks:["Exclude 10.0.0.1 through 10.0.0.10","Create pool LAN","Set the network/mask","Set the default-router","Set the DNS server"],
+sol:["ip dhcp excluded-address 10.0.0.1 10.0.0.10","ip dhcp pool LAN","network 10.0.0.0 255.255.255.0","default-router 10.0.0.1","dns-server 8.8.8.8"]},
+{t:"Enable SSH",d:"ips",lvl:3,
+scenario:"Secure R1 for SSH-only management: domain lab.local, 2048-bit keys, user admin, and vty lines locked to SSH with local login.",
+tasks:["Set domain-name lab.local","Generate 2048-bit RSA keys","Create user admin (priv 15) with a secret","Enter vty lines 0–15","Allow only SSH transport","Use local login"],
+sol:["ip domain-name lab.local","crypto key generate rsa modulus 2048","username admin privilege 15 secret <x>","line vty 0 15","transport input ssh","login local"]},
+{t:"Port security",d:"sf",lvl:2,
+scenario:"Lock access port f0/1 to at most 2 sticky-learned MACs, dropping and logging violations without shutting the port.",
+tasks:["Enter interface f0/1","Set it to access mode","Enable port security","Set maximum 2","Sticky-learn MACs","Set violation mode restrict"],
+sol:["interface f0/1","switchport mode access","switchport port-security","switchport port-security maximum 2","switchport port-security mac-address sticky","switchport port-security violation restrict"]},
+{t:"DHCP snooping + DAI",d:"sf",lvl:3,
+scenario:"Protect VLAN 10: enable DHCP snooping and dynamic ARP inspection, trusting only uplink g0/1.",
+tasks:["Enable DHCP snooping globally","Enable snooping on VLAN 10","Enable DAI on VLAN 10","Enter interface g0/1","Trust it for DHCP snooping","Trust it for ARP inspection"],
+sol:["ip dhcp snooping","ip dhcp snooping vlan 10","ip arp inspection vlan 10","interface g0/1","ip dhcp snooping trust","ip arp inspection trust"]}
+];
+let conf=null;
+window.startConf=i=>{conf={idx:i,graded:false};view="confgame";render();setTimeout(()=>{const el=document.getElementById("confArea");if(el)el.focus();},60);};
+window.confGrade=()=>{
+  if(!conf||conf.graded)return;
+  const el=document.getElementById("confArea"); if(!el)return;
+  const lines=el.value.split("\n").map(s=>s.trim()).filter(s=>s.length);
+  const sol=CONFIGS[conf.idx].sol;
+  // greedy line match: each solution line is satisfied if ANY typed line matches it (forgiving), order-independent
+  const used=new Array(lines.length).fill(false);
+  const results=sol.map(s=>{
+    for(let j=0;j<lines.length;j++){ if(!used[j]&&matchOne(lines[j],s)){used[j]=true;return {sol:s,ok:true};} }
+    return {sol:s,ok:false};
+  });
+  conf.results=results;
+  conf.extras=lines.filter((_,j)=>!used[j]);
+  conf.score=results.filter(r=>r.ok).length;
+  conf.graded=true;
+  const key="conf_"+conf.idx;
+  S.game.best=S.game.best||{};
+  if(!S.game.best[key]||conf.score>S.game.best[key]){S.game.best[key]=conf.score;}
+  bump();saveState();renderConf();
+};
+function renderConf(){
+  if(!conf){renderConfMenu();return;}
+  const c=CONFIGS[conf.idx], d=dom(c.d);
+  if(!conf.graded){
+    main.innerHTML=`<div class="qmeta"><button class="btn" onclick="conf=null;render()">← Config lab list</button>
+    <span class="pill" style="background:${cv(C[d.color][1])};color:${cv(C[d.color][2])}">${d.name} · ${"▲".repeat(c.lvl)}</span></div>
+    <div class="prompt">CCNA-LAB# <b>configure-challenge ${conf.idx+1}</b></div>
+    <h1 style="font-size:23px">${c.t}</h1>
+    <div class="card"><h3 style="margin-top:0">Scenario</h3><p style="font-size:14px;color:var(--ink-soft)">${c.scenario}</p>
+    <h3>What it must do</h3>${c.tasks.map(t=>`<div class="conf-task">${t}</div>`).join("")}</div>
+    <div class="card"><h3 style="margin-top:0">Type the full configuration</h3>
+    <p style="font-size:12.5px;color:var(--ink-faint);margin-bottom:8px">One command per line. Order doesn't matter, shortcuts work, values are flexible. You won't be told the answers until you submit — research if you must, just like the job.</p>
+    <textarea id="confArea" class="conf-area" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="hostname ...&#10;interface ...&#10;..."></textarea>
+    <div style="margin-top:12px"><button class="btn primary" onclick="confGrade()">Submit configuration</button></div></div>`;
+    return;
+  }
+  // graded view
+  const total=c.sol.length, pct=Math.round(conf.score/total*100);
+  main.innerHTML=`<div class="qmeta"><button class="btn" onclick="conf=null;render()">← Config lab list</button></div>
+  <div class="prompt">CCNA-LAB# <b>show config-result</b></div>
+  <h1 style="font-size:23px">${c.t}</h1>
+  <div class="card" style="text-align:center;padding:24px"><div class="bignum" style="color:${pct>=100?'var(--green-deep)':pct>=60?'var(--amber-deep)':'var(--red-deep)'}">${conf.score}/${total}</div>
+  <p style="color:var(--ink-soft);margin-top:6px">${pct===100?'Perfect — every required line present.':pct>=60?'Close — fill in the missing lines below.':'Review the lesson, then try again.'}</p></div>
+  <div class="card"><h3 style="margin-top:0">Line-by-line</h3>
+  ${conf.results.map(r=>`<div class="conf-line ${r.ok?'hit':'miss'}"><span class="mk">${r.ok?'✓':'✗'}</span><span>${r.sol.replace(/<x>/g,'<value>')}</span></div>`).join("")}
+  ${conf.extras.length?`<p style="font-size:12.5px;color:var(--ink-faint);margin-top:10px">Lines that didn't match a requirement (may be fine, may be typos): ${conf.extras.map(e=>`<span class="chip">${e}</span>`).join(" ")}</p>`:""}</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" onclick="startConf(${conf.idx})">Try again</button>
+  <button class="btn" onclick="startPractice('${c.d}')">Drill this domain</button>
+  <button class="btn" onclick="conf=null;render()">Config lab list</button></div>`;
+}
+function renderConfMenu(){
+  main.innerHTML=`<div class="prompt">CCNA-LAB# <b>show config-challenges</b></div><h1>Config builder</h1>
+  <p class="sub">Read a scenario, then type the <i>entire</i> configuration from scratch — the closest thing to the exam's full simulation questions. Graded line by line; order-independent, shortcuts and flexible values accepted.</p>
+  ${CONFIGS.map((c,i)=>{const d=dom(c.d);const key="conf_"+i;const best=(S.game.best||{})[key];
+  return `<div class="card hoverable" style="display:flex;align-items:center;gap:13px;cursor:pointer" onclick="startConf(${i})" role="button" tabindex="0">
+    <span class="pill" style="background:${cv(C[d.color][1])};color:${cv(C[d.color][2])};flex-shrink:0">${"▲".repeat(c.lvl)}</span>
+    <div style="flex:1"><div style="font-weight:600;font-size:15px">${c.t}</div>
+    <div style="font-size:12.5px;color:var(--ink-soft)">${c.tasks.length} required commands${best!==undefined?` · best ${best}/${c.sol.length}`:''}</div></div>
+    <span style="color:var(--ink-faint)">›</span></div>`;}).join("")}`;
+}
+
+// ===== wire both into Arcade + Stats + router =====
+const renderGames3=renderGames;
+renderGames=function(){
+  renderGames3();
+  const card=`<div class="card hoverable game-card" style="display:flex;gap:15px;align-items:center" onclick="conf=null;view='confgame';render()" role="button" tabindex="0">
+    <div class="game-ic" style="background:var(--teal-soft);color:var(--teal-deep)">🔧</div>
+    <div style="flex:1"><div style="font-weight:600;font-size:16px">Config builder</div>
+    <p style="font-size:13px;color:var(--ink-soft)">Read a scenario, type the whole multi-line config from scratch. ${CONFIGS.length} labs, graded line by line.</p></div><span style="color:var(--ink-faint)">›</span></div>`;
+  main.insertAdjacentHTML("beforeend",card);
+};
+// Stats: surface shaky (lucky-guess) questions for review
+const renderStats3=renderStats;
+renderStats=function(){
+  renderStats3();
+  const lucky=Object.keys(S.conf||{}).filter(k=>S.conf[k]==="lucky").length;
+  const shaky=shakyIdx().length;
+  if(shaky>0){
+    main.insertAdjacentHTML("beforeend",
+    `<div class="card"><h3 style="margin-top:0">Shaky spots</h3>
+    <p style="font-size:13.5px;color:var(--ink-soft)">${shaky} question${shaky===1?'':'s'} you missed or got right but weren't sure about${lucky?` (${lucky} lucky guess${lucky===1?'':'es'})`:''}. These are the dangerous ones — they feel fine but aren't solid yet.</p>
+    <button class="btn primary" style="margin-top:10px" onclick="drillShaky()">Drill my shaky spots</button></div>`);
+  }
+};
+window.drillShaky=()=>{
+  const idxs=shakyIdx(); if(!idxs.length){alert("Nothing shaky right now — nice.");return;}
+  let pool=idxs.map(i=>({q:QB[i],i})); shuffle(pool); pool=pool.slice(0,25);
+  practiceState={pool,idx:0,picked:null,right:0,domain:null};
+  pendingConf=null; view="practice"; render();
+};
+const _go5=window.go;
+window.go=v=>{conf=null;cli=null;_go5(v);};
+const _render2=render;
+render=function(){
+  if(view==="confgame"){renderNav();renderConf();$("topStatus").textContent=`Interface Study0/1 is up, line protocol is up · ⚡${streakLive()}d · config builder`;return;}
+  _render2();
+};
+render();
 </script>
 </body>
 </html>
