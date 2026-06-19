@@ -1193,12 +1193,14 @@ window.exportProgress=()=>{
 };
 window.applyImport=(text)=>{
   let obj;
-  try{obj=JSON.parse(text);}catch(e){alert("That file isn't valid JSON — make sure you picked a ccna-progress backup file.");return false;}
-  const d=obj&&obj.app==="ccna-lab-notebook"?obj.data:obj; // accept raw state too
+  // accept base64 sync codes
+  if(!text.trim().startsWith("{"))try{text=atob(text.trim());}catch(e){}
+  try{obj=JSON.parse(text);}catch(e){alert("That doesn't look like a valid backup or sync code.");return false;}
+  const d=obj&&obj.app==="ccna-lab-notebook"?obj.data:obj;
   if(!d||typeof d!=="object"||typeof d.seen!=="object"||typeof d.right!=="object"){alert("That file doesn't look like a CCNA Lab Notebook backup.");return false;}
-  S={seen:d.seen||{},right:d.right||{},examHistory:d.examHistory||[],best:d.best||{},days:d.days||{},streak:d.streak||{last:null,count:0},qotd:d.qotd||{},marks:d.marks||{}};
+  S={seen:d.seen||{},right:d.right||{},examHistory:d.examHistory||[],best:d.best||{},days:d.days||{},streak:d.streak||{last:null,count:0},qotd:d.qotd||{},marks:d.marks||{},game:d.game||S.game||{}};
   saveState();render();
-  alert(`Imported: ${Object.keys(S.days).length} course days, ${Object.keys(S.seen).length} answered questions, ${S.examHistory.length} exam scores.`);
+  alert(`Synced! ${Object.keys(S.days).length} course days, ${Object.keys(S.seen).length} answered questions, ${S.examHistory.length} exam scores.`);
   return true;
 };
 window.importProgress=()=>{
@@ -1208,13 +1210,47 @@ window.importProgress=()=>{
     document.body.appendChild(inp);}
   inp.click();
 };
+window.showSyncCode=()=>{
+  const payload={app:"ccna-lab-notebook",version:3,exported:new Date().toISOString(),data:S};
+  const code=btoa(JSON.stringify(payload));
+  const modal=document.createElement("div");
+  modal.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
+  modal.innerHTML=`<div style="background:var(--bg-card);border-radius:14px;padding:20px;max-width:480px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.4)">
+    <h3 style="margin:0 0 8px">Sync code</h3>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 12px">Copy this code. On your other device, tap <b>Apply sync code</b> and paste it in. Your days, answers, streak, and scores will transfer.</p>
+    <textarea id="syncout" readonly style="width:100%;height:110px;font-size:11px;font-family:monospace;resize:none;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--ink);box-sizing:border-box">${code}</textarea>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn primary" onclick="const t=document.getElementById('syncout');t.select();navigator.clipboard&&navigator.clipboard.writeText(t.value).then(()=>this.textContent='✓ Copied!').catch(()=>{t.select();document.execCommand('copy');this.textContent='✓ Copied!'})">Copy to clipboard</button>
+      <button class="btn" onclick="this.closest('[style*=fixed]').remove()">Close</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener("click",e=>{if(e.target===modal)modal.remove();});
+};
+window.applySyncCode=()=>{
+  const modal=document.createElement("div");
+  modal.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
+  modal.innerHTML=`<div style="background:var(--bg-card);border-radius:14px;padding:20px;max-width:480px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.4)">
+    <h3 style="margin:0 0 8px">Apply sync code</h3>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 12px">Paste the sync code from your other device. This will <b>replace</b> progress on this device.</p>
+    <textarea id="syncin" placeholder="Paste sync code here…" style="width:100%;height:110px;font-size:11px;font-family:monospace;resize:none;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--ink);box-sizing:border-box"></textarea>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn primary" onclick="const v=document.getElementById('syncin').value.trim();if(!v)return;if(applyImport(v))this.closest('[style*=fixed]').remove()">Apply & sync</button>
+      <button class="btn" onclick="this.closest('[style*=fixed]').remove()">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener("click",e=>{if(e.target===modal)modal.remove();});
+};
 function backupCard(){
-  return `<div class="card"><h3 style="margin-top:0">Backup & move between devices</h3>
-  <p style="font-size:13.5px;color:var(--ink-soft)">Progress lives in this browser's storage, not in the HTML file. Export a backup file here (e.g. on your work PC), then import it on your phone or home machine to carry everything over — days, answers, streak, bookmarks, and exam history. Import replaces what's on the device.</p>
+  return `<div class="card"><h3 style="margin-top:0">Sync between devices</h3>
+  <p style="font-size:13.5px;color:var(--ink-soft)">Progress lives in this browser — not the file. Use a sync code to carry everything (days, answers, streak, exam scores) to your Mac, PC, or phone without cables or accounts.</p>
   <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-    <button class="btn primary" onclick="exportProgress()">⬇ Export progress</button>
-    <button class="btn" onclick="importProgress()">⬆ Import progress</button>
-  </div></div>`;
+    <button class="btn primary" onclick="showSyncCode()">📋 Get sync code</button>
+    <button class="btn" onclick="applySyncCode()">📥 Apply sync code</button>
+  </div>
+  <p style="font-size:12px;color:var(--ink-faint);margin:10px 0 0">Also: <button class="btn" style="font-size:12px;padding:3px 8px" onclick="exportProgress()">⬇ Export file</button> <button class="btn" style="font-size:12px;padding:3px 8px;margin-left:4px" onclick="importProgress()">⬆ Import file</button></p>
+  </div>`;
 }
 // surface it on Stats (desktop + mobile) and More (mobile)
 const renderStats2=renderStats;
