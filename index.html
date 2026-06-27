@@ -555,18 +555,31 @@ async function cloudSyncOnLoad(){
 }
 window.cloudEnable=async function(){
   // create a new blob, become the source of truth
+  let r;
+  const payload={app:"ccna-lab-notebook",version:3,updated:Date.now(),data:S};
   try{
-    const payload={app:"ccna-lab-notebook",version:3,updated:Date.now(),data:S};
-    const r=await fetch(JB,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},body:JSON.stringify(payload)});
-    const loc=r.headers.get("Location")||r.headers.get("location");
-    let id=null;
-    if(loc)id=loc.split("/").pop();
-    if(!id){const txt=await r.text();/* fallback */}
-    if(!id){alert("Couldn't reach the sync service. Check your connection and try again.");return null;}
-    setSyncId(id);setSyncTime(payload.updated);
-    render();
-    return id;
-  }catch(e){alert("Couldn't reach the sync service. Check your connection and try again.");return null;}
+    r=await fetch(JB,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},body:JSON.stringify(payload)});
+  }catch(e){
+    alert("Couldn't reach the sync service (network/CORS blocked the request).\n\n"+(e&&e.message?e.message:e)+"\n\nThis is usually an ad-blocker or strict privacy setting blocking jsonblob.com. Try disabling content blockers for this site, or use the offline 'Manual code' option below.");
+    return null;
+  }
+  if(!r.ok){
+    alert("The sync service returned an error (HTTP "+r.status+"). Please try again in a moment.");
+    return null;
+  }
+  // jsonblob returns the new blob id in the Location header and X-jsonblob header
+  let id=null;
+  const loc=r.headers.get("Location")||r.headers.get("location");
+  if(loc)id=loc.split("/").pop();
+  if(!id){const xj=r.headers.get("X-jsonblob")||r.headers.get("x-jsonblob");if(xj)id=xj;}
+  if(!id){
+    // header wasn't exposed to JS by CORS — last resort, the body sometimes echoes nothing useful
+    alert("Connected to the sync service, but the browser couldn't read back your sync key (the server didn't expose it to JavaScript).\n\nUse the offline 'Manual code' option below to move progress instead — it works the same, just copy/paste.");
+    return null;
+  }
+  setSyncId(id);setSyncTime(payload.updated);
+  render();
+  return id;
 };
 window.cloudConnect=async function(id){
   id=(id||"").trim().replace(/.*\//,"");
