@@ -511,38 +511,44 @@ async function saveState(){
 }
 let mem=false;
 
-// ===== CROSS-DEVICE CLOUD SYNC (jsonblob.com — free, no signup) =====
-const JB="https://jsonblob.com/api/jsonBlob";
-const getSyncId=()=>{try{return localStorage.getItem("ccna-sync-id");}catch(e){return null;}};
-const setSyncId=id=>{try{id?localStorage.setItem("ccna-sync-id",id):localStorage.removeItem("ccna-sync-id");}catch(e){}};
+// ===== CROSS-DEVICE CLOUD SYNC (jsonbin.io — free account, reliable CORS) =====
+const JB="https://api.jsonbin.io/v3/b";
+const getJBKey=()=>{try{return localStorage.getItem("ccna-jb-key");}catch(e){return null;}};
+const getJBBin=()=>{try{return localStorage.getItem("ccna-jb-bin");}catch(e){return null;}};
+const cloudOn=()=>!!(getJBKey()&&getJBBin());
+function setCloud(key,bin){try{if(key&&bin){localStorage.setItem("ccna-jb-key",key);localStorage.setItem("ccna-jb-bin",bin);}else{localStorage.removeItem("ccna-jb-key");localStorage.removeItem("ccna-jb-bin");}}catch(e){}}
+// combined sync key shared between devices: "<masterKey>|<binId>"
+const makeSyncKey=()=>`${getJBKey()}|${getJBBin()}`;
+const setSyncTime=t=>{try{localStorage.setItem("ccna-sync-time",String(t));}catch(e){}};
+const getSyncTime=()=>{try{return parseInt(localStorage.getItem("ccna-sync-time")||"0");}catch(e){return 0;}};
 let cloudBusy=false,cloudTimer=null;
 function cloudPushDebounced(){
-  if(!getSyncId())return;
+  if(!cloudOn())return;
   clearTimeout(cloudTimer);
   cloudTimer=setTimeout(()=>cloudPush(),1500);
 }
 async function cloudPush(){
-  const id=getSyncId();if(!id||cloudBusy)return;
+  if(!cloudOn()||cloudBusy)return;
   cloudBusy=true;
   try{
     const payload={app:"ccna-lab-notebook",version:3,updated:Date.now(),data:S};
-    await fetch(`${JB}/${id}`,{method:"PUT",headers:{"Content-Type":"application/json","Accept":"application/json"},body:JSON.stringify(payload)});
+    await fetch(`${JB}/${getJBBin()}`,{method:"PUT",headers:{"Content-Type":"application/json","X-Master-Key":getJBKey()},body:JSON.stringify(payload)});
     setSyncTime(payload.updated);
   }catch(e){}
   cloudBusy=false;
 }
 async function cloudPull(){
-  const id=getSyncId();if(!id)return null;
+  if(!cloudOn())return null;
   try{
-    const r=await fetch(`${JB}/${id}`,{headers:{"Accept":"application/json"}});
+    const r=await fetch(`${JB}/${getJBBin()}/latest`,{headers:{"X-Master-Key":getJBKey(),"X-Bin-Meta":"false"}});
     if(!r.ok)return null;
     const obj=await r.json();
-    return obj&&obj.app==="ccna-lab-notebook"?obj:null;
+    // X-Bin-Meta:false returns the record directly
+    const rec=obj&&obj.record?obj.record:obj;
+    return rec&&rec.app==="ccna-lab-notebook"?rec:null;
   }catch(e){return null;}
 }
-const setSyncTime=t=>{try{localStorage.setItem("ccna-sync-time",String(t));}catch(e){}};
-const getSyncTime=()=>{try{return parseInt(localStorage.getItem("ccna-sync-time")||"0");}catch(e){return 0;}};
-// On startup, if a sync key exists, pull remote and adopt it if newer than local
+// On startup, if cloud is on, pull remote and adopt it if newer than local
 async function cloudSyncOnLoad(){
   const remote=await cloudPull();
   if(!remote||!remote.data)return;
@@ -553,40 +559,36 @@ async function cloudSyncOnLoad(){
     saveState();render();
   }
 }
-window.cloudEnable=async function(){
-  // create a new blob, become the source of truth
+// First device: user supplies their jsonbin Master Key, we create a private bin
+window.cloudEnable=async function(masterKey){
+  masterKey=(masterKey||"").trim();
+  if(!masterKey){alert("Paste your jsonbin.io Master Key first.");return null;}
   let r;
   const payload={app:"ccna-lab-notebook",version:3,updated:Date.now(),data:S};
   try{
-    r=await fetch(JB,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},body:JSON.stringify(payload)});
+    r=await fetch(JB,{method:"POST",headers:{"Content-Type":"application/json","X-Master-Key":masterKey,"X-Bin-Private":"true","X-Bin-Name":"ccna-progress"},body:JSON.stringify(payload)});
   }catch(e){
-    alert("Couldn't reach the sync service (network/CORS blocked the request).\n\n"+(e&&e.message?e.message:e)+"\n\nThis is usually an ad-blocker or strict privacy setting blocking jsonblob.com. Try disabling content blockers for this site, or use the offline 'Manual code' option below.");
+    alert("Couldn't reach jsonbin.io (network blocked the request).\n\n"+(e&&e.message?e.message:e));
     return null;
   }
-  if(!r.ok){
-    alert("The sync service returned an error (HTTP "+r.status+"). Please try again in a moment.");
-    return null;
-  }
-  // jsonblob returns the new blob id in the Location header and X-jsonblob header
-  let id=null;
-  const loc=r.headers.get("Location")||r.headers.get("location");
-  if(loc)id=loc.split("/").pop();
-  if(!id){const xj=r.headers.get("X-jsonblob")||r.headers.get("x-jsonblob");if(xj)id=xj;}
-  if(!id){
-    // header wasn't exposed to JS by CORS — last resort, the body sometimes echoes nothing useful
-    alert("Connected to the sync service, but the browser couldn't read back your sync key (the server didn't expose it to JavaScript).\n\nUse the offline 'Manual code' option below to move progress instead — it works the same, just copy/paste.");
-    return null;
-  }
-  setSyncId(id);setSyncTime(payload.updated);
+  if(r.status===401||r.status===403){alert("jsonbin.io rejected that Master Key (HTTP "+r.status+"). Copy it again from your jsonbin API Keys page — it should start with $2a$ or $2b$.");return null;}
+  if(!r.ok){alert("jsonbin.io returned an error (HTTP "+r.status+"). Try again in a moment.");return null;}
+  let obj;try{obj=await r.json();}catch(e){obj=null;}
+  const bin=obj&&obj.metadata&&obj.metadata.id;
+  if(!bin){alert("Created the bin but couldn't read its id back. Please try again.");return null;}
+  setCloud(masterKey,bin);setSyncTime(payload.updated);
   render();
-  return id;
+  return makeSyncKey();
 };
-window.cloudConnect=async function(id){
-  id=(id||"").trim().replace(/.*\//,"");
-  if(!id){alert("Paste your sync key first.");return false;}
-  setSyncId(id);
+// Other devices: paste the combined sync key "<masterKey>|<binId>"
+window.cloudConnect=async function(combined){
+  combined=(combined||"").trim();
+  const parts=combined.split("|");
+  if(parts.length<2||!parts[0].trim()||!parts[1].trim()){alert("That doesn't look like a sync key. It should be your master key and bin id joined by a | character.");return false;}
+  const key=parts[0].trim(),bin=parts[1].trim();
+  setCloud(key,bin);
   const remote=await cloudPull();
-  if(!remote){setSyncId(null);alert("That sync key didn't return any data. Double-check it.");return false;}
+  if(!remote){setCloud(null,null);alert("That sync key didn't return any data — double-check you copied the whole thing.");return false;}
   const d=remote.data||{};
   S={seen:d.seen||{},right:d.right||{},examHistory:d.examHistory||[],best:d.best||{},days:d.days||{},streak:d.streak||{last:null,count:0},qotd:d.qotd||{},marks:d.marks||{},game:d.game||S.game||{}};
   setSyncTime(remote.updated||Date.now());
@@ -596,7 +598,7 @@ window.cloudConnect=async function(id){
 };
 window.cloudDisable=function(){
   if(!confirm("Stop auto-syncing on this device? Your progress stays, but changes won't push to the cloud anymore."))return;
-  setSyncId(null);render();
+  setCloud(null,null);render();
 };
 loadState0=loadState;
 loadState=async()=>{await loadState0();mem=(store==="mem");};
@@ -1332,18 +1334,40 @@ window.applySyncCode=()=>{
   modal.addEventListener("click",e=>{if(e.target===modal)modal.remove();});
 };
 window.showCloudKey=()=>{
-  const id=getSyncId();if(!id)return;
+  if(!cloudOn())return;
   const modal=document.createElement("div");
   modal.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
-  modal.innerHTML=`<div style="background:var(--bg-card);border-radius:14px;padding:20px;max-width:460px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.4)">
-    <h3 style="margin:0 0 8px">Your sync key</h3>
-    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 12px">On your <b>other</b> device, open this app → Stats → <b>Connect a device</b>, then paste this key. That device will pull your progress and stay synced automatically.</p>
-    <input id="ckey" readonly value="${id}" style="width:100%;font-size:14px;font-family:monospace;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--ink);box-sizing:border-box">
+  const key=makeSyncKey();
+  modal.innerHTML=`<div style="background:var(--bg-card);border-radius:14px;padding:20px;max-width:480px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.4)">
+    <h3 style="margin:0 0 8px">Your sync key ✅</h3>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 12px">Cloud sync is on. On your <b>other</b> device, open this app → Stats → <b>I already have a sync key</b>, then paste this whole string. That device will pull your progress and stay synced automatically.</p>
+    <textarea id="ckey" readonly style="width:100%;height:70px;font-size:12px;font-family:monospace;resize:none;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--ink);box-sizing:border-box">${key}</textarea>
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
       <button class="btn primary" onclick="const t=document.getElementById('ckey');t.select();navigator.clipboard&&navigator.clipboard.writeText(t.value).then(()=>this.textContent='✓ Copied!').catch(()=>{document.execCommand('copy');this.textContent='✓ Copied!'})">Copy key</button>
       <button class="btn" onclick="this.closest('[style*=fixed]').remove()">Close</button>
     </div>
-    <p style="font-size:11.5px;color:var(--ink-faint);margin:12px 0 0">Anyone with this key can read/write this progress, so keep it to yourself. It's tied to a free public store, not an account.</p>
+    <p style="font-size:11.5px;color:var(--ink-faint);margin:12px 0 0">This key contains your private jsonbin Master Key — only put it on devices you own, don't share it.</p>
+  </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener("click",e=>{if(e.target===modal)modal.remove();});
+};
+window.enableCloud=()=>{
+  const modal=document.createElement("div");
+  modal.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
+  modal.innerHTML=`<div style="background:var(--bg-card);border-radius:14px;padding:20px;max-width:480px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.4)">
+    <h3 style="margin:0 0 8px">Turn on cloud sync</h3>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 10px">One-time setup on your <b>first</b> device:</p>
+    <ol style="font-size:13px;color:var(--ink-soft);margin:0 0 12px;padding-left:18px;line-height:1.6">
+      <li>Go to <b>jsonbin.io</b> → sign up free (email + password).</li>
+      <li>Open <b>API Keys</b> in the menu and copy your <b>Master Key</b> (starts with <code>$2a$</code> or <code>$2b$</code>).</li>
+      <li>Paste it below.</li>
+    </ol>
+    <input id="mkin" placeholder="Paste your jsonbin Master Key…" style="width:100%;font-size:13px;font-family:monospace;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--ink);box-sizing:border-box">
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn primary" onclick="const v=document.getElementById('mkin').value;this.textContent='Setting up…';cloudEnable(v).then(k=>{if(k){this.closest('[style*=fixed]').remove();showCloudKey();}else this.textContent='Turn on sync'})">Turn on sync</button>
+      <button class="btn" onclick="window.open('https://jsonbin.io','_blank')">Open jsonbin.io ↗</button>
+      <button class="btn" onclick="this.closest('[style*=fixed]').remove()">Cancel</button>
+    </div>
   </div>`;
   document.body.appendChild(modal);
   modal.addEventListener("click",e=>{if(e.target===modal)modal.remove();});
@@ -1351,10 +1375,10 @@ window.showCloudKey=()=>{
 window.connectDevice=()=>{
   const modal=document.createElement("div");
   modal.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
-  modal.innerHTML=`<div style="background:var(--bg-card);border-radius:14px;padding:20px;max-width:460px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.4)">
-    <h3 style="margin:0 0 8px">Connect a device</h3>
-    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 12px">Paste the sync key from the device that already has your progress. This device will pull that progress (replacing what's here) and stay synced.</p>
-    <input id="ckin" placeholder="Paste sync key…" style="width:100%;font-size:14px;font-family:monospace;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--ink);box-sizing:border-box">
+  modal.innerHTML=`<div style="background:var(--bg-card);border-radius:14px;padding:20px;max-width:480px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.4)">
+    <h3 style="margin:0 0 8px">Connect this device</h3>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 12px">Paste the sync key from the device that already has cloud sync on (Stats → Show my sync key). This device will pull that progress (replacing what's here) and stay synced.</p>
+    <textarea id="ckin" placeholder="Paste sync key…" style="width:100%;height:70px;font-size:12px;font-family:monospace;resize:none;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--ink);box-sizing:border-box"></textarea>
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
       <button class="btn primary" onclick="const v=document.getElementById('ckin').value;this.textContent='Connecting…';cloudConnect(v).then(ok=>{if(ok)this.closest('[style*=fixed]').remove();else this.textContent='Connect & sync'})">Connect & sync</button>
       <button class="btn" onclick="this.closest('[style*=fixed]').remove()">Cancel</button>
@@ -1364,18 +1388,17 @@ window.connectDevice=()=>{
   modal.addEventListener("click",e=>{if(e.target===modal)modal.remove();});
 };
 function backupCard(){
-  const on=!!getSyncId();
+  const on=cloudOn();
   return `<div class="card"><h3 style="margin-top:0">Cloud sync ${on?'<span style="font-size:12px;color:var(--teal-deep,#2E9E6B);font-weight:600">● ON</span>':''}</h3>
-  <p style="font-size:13.5px;color:var(--ink-soft)">Keep your Mac, PC, and phone in sync automatically — days, answers, streak, and exam scores. ${on?'This device is syncing in the background every time you make progress.':'Turn it on once, copy the key to your other devices, and it just works. Free, no account.'}</p>
+  <p style="font-size:13.5px;color:var(--ink-soft)">Keep your Mac, PC, and phone in sync automatically — days, answers, streak, and exam scores. ${on?'This device is syncing in the background every time you make progress.':'Set it up once with a free jsonbin.io account, copy your key to other devices, and it just works.'}</p>
   <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
     ${on
       ? `<button class="btn primary" onclick="showCloudKey()">📋 Show my sync key</button>
-         <button class="btn" onclick="connectDevice()">🔗 Connect this to another key</button>
          <button class="btn" onclick="cloudDisable()">⏻ Turn off</button>`
-      : `<button class="btn primary" onclick="this.textContent='Setting up…';cloudEnable().then(id=>{if(id)showCloudKey()})">☁ Turn on cloud sync</button>
+      : `<button class="btn primary" onclick="enableCloud()">☁ Turn on cloud sync</button>
          <button class="btn" onclick="connectDevice()">🔗 I already have a sync key</button>`}
   </div>
-  <p style="font-size:12px;color:var(--ink-faint);margin:12px 0 0">Offline backup: <button class="btn" style="font-size:12px;padding:3px 8px" onclick="exportProgress()">⬇ Export file</button> <button class="btn" style="font-size:12px;padding:3px 8px;margin-left:4px" onclick="importProgress()">⬆ Import file</button> <button class="btn" style="font-size:12px;padding:3px 8px;margin-left:4px" onclick="showSyncCode()">📋 Manual code</button></p>
+  <p style="font-size:12px;color:var(--ink-faint);margin:12px 0 0">No account? Offline backup: <button class="btn" style="font-size:12px;padding:3px 8px" onclick="exportProgress()">⬇ Export file</button> <button class="btn" style="font-size:12px;padding:3px 8px;margin-left:4px" onclick="importProgress()">⬆ Import file</button> <button class="btn" style="font-size:12px;padding:3px 8px;margin-left:4px" onclick="showSyncCode()">📋 Manual code</button></p>
   </div>`;
 }
 // surface it on Stats (desktop + mobile) and More (mobile)
