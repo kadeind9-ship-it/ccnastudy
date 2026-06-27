@@ -507,8 +507,84 @@ async function loadState(){
 async function saveState(){
   if(store==="cloud"){try{await window.storage.set("ccna-progress",JSON.stringify(S));}catch(e){}}
   else if(store==="local"){try{localStorage.setItem("ccna-progress",JSON.stringify(S));}catch(e){}}
+  cloudPushDebounced();
 }
 let mem=false;
+
+// ===== CROSS-DEVICE CLOUD SYNC (jsonblob.com — free, no signup) =====
+const JB="https://jsonblob.com/api/jsonBlob";
+const getSyncId=()=>{try{return localStorage.getItem("ccna-sync-id");}catch(e){return null;}};
+const setSyncId=id=>{try{id?localStorage.setItem("ccna-sync-id",id):localStorage.removeItem("ccna-sync-id");}catch(e){}};
+let cloudBusy=false,cloudTimer=null;
+function cloudPushDebounced(){
+  if(!getSyncId())return;
+  clearTimeout(cloudTimer);
+  cloudTimer=setTimeout(()=>cloudPush(),1500);
+}
+async function cloudPush(){
+  const id=getSyncId();if(!id||cloudBusy)return;
+  cloudBusy=true;
+  try{
+    const payload={app:"ccna-lab-notebook",version:3,updated:Date.now(),data:S};
+    await fetch(`${JB}/${id}`,{method:"PUT",headers:{"Content-Type":"application/json","Accept":"application/json"},body:JSON.stringify(payload)});
+    setSyncTime(payload.updated);
+  }catch(e){}
+  cloudBusy=false;
+}
+async function cloudPull(){
+  const id=getSyncId();if(!id)return null;
+  try{
+    const r=await fetch(`${JB}/${id}`,{headers:{"Accept":"application/json"}});
+    if(!r.ok)return null;
+    const obj=await r.json();
+    return obj&&obj.app==="ccna-lab-notebook"?obj:null;
+  }catch(e){return null;}
+}
+const setSyncTime=t=>{try{localStorage.setItem("ccna-sync-time",String(t));}catch(e){}};
+const getSyncTime=()=>{try{return parseInt(localStorage.getItem("ccna-sync-time")||"0");}catch(e){return 0;}};
+// On startup, if a sync key exists, pull remote and adopt it if newer than local
+async function cloudSyncOnLoad(){
+  const remote=await cloudPull();
+  if(!remote||!remote.data)return;
+  if((remote.updated||0)>getSyncTime()){
+    const d=remote.data;
+    S={seen:d.seen||{},right:d.right||{},examHistory:d.examHistory||[],best:d.best||{},days:d.days||{},streak:d.streak||{last:null,count:0},qotd:d.qotd||{},marks:d.marks||{},game:d.game||S.game||{}};
+    setSyncTime(remote.updated||Date.now());
+    saveState();render();
+  }
+}
+window.cloudEnable=async function(){
+  // create a new blob, become the source of truth
+  try{
+    const payload={app:"ccna-lab-notebook",version:3,updated:Date.now(),data:S};
+    const r=await fetch(JB,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},body:JSON.stringify(payload)});
+    const loc=r.headers.get("Location")||r.headers.get("location");
+    let id=null;
+    if(loc)id=loc.split("/").pop();
+    if(!id){const txt=await r.text();/* fallback */}
+    if(!id){alert("Couldn't reach the sync service. Check your connection and try again.");return null;}
+    setSyncId(id);setSyncTime(payload.updated);
+    render();
+    return id;
+  }catch(e){alert("Couldn't reach the sync service. Check your connection and try again.");return null;}
+};
+window.cloudConnect=async function(id){
+  id=(id||"").trim().replace(/.*\//,"");
+  if(!id){alert("Paste your sync key first.");return false;}
+  setSyncId(id);
+  const remote=await cloudPull();
+  if(!remote){setSyncId(null);alert("That sync key didn't return any data. Double-check it.");return false;}
+  const d=remote.data||{};
+  S={seen:d.seen||{},right:d.right||{},examHistory:d.examHistory||[],best:d.best||{},days:d.days||{},streak:d.streak||{last:null,count:0},qotd:d.qotd||{},marks:d.marks||{},game:d.game||S.game||{}};
+  setSyncTime(remote.updated||Date.now());
+  saveState();render();
+  alert(`Connected! Synced ${Object.keys(S.days).length} days and ${Object.keys(S.seen).length} answered questions. This device now stays in sync automatically.`);
+  return true;
+};
+window.cloudDisable=function(){
+  if(!confirm("Stop auto-syncing on this device? Your progress stays, but changes won't push to the cloud anymore."))return;
+  setSyncId(null);render();
+};
 loadState0=loadState;
 loadState=async()=>{await loadState0();mem=(store==="mem");};
 
@@ -709,7 +785,7 @@ function renderRes(){
 function render(){renderNav();({dash:renderDash,study:renderStudy,practice:renderPractice,exam:renderExam,flash:renderFlashView,plan:renderPlan,res:renderRes})[view]();
 $("topStatus").textContent=`Interface Study0/1 is up, line protocol is up · ${Object.keys(S.seen).length}/${QB.length} questions attempted`;}
 
-loadState().then(render);
+loadState().then(()=>{render();cloudSyncOnLoad();});
 </script>
 <style>
 .card{transition:border-color var(--ease),box-shadow var(--ease),transform var(--ease)}
@@ -1242,14 +1318,51 @@ window.applySyncCode=()=>{
   document.body.appendChild(modal);
   modal.addEventListener("click",e=>{if(e.target===modal)modal.remove();});
 };
+window.showCloudKey=()=>{
+  const id=getSyncId();if(!id)return;
+  const modal=document.createElement("div");
+  modal.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
+  modal.innerHTML=`<div style="background:var(--bg-card);border-radius:14px;padding:20px;max-width:460px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.4)">
+    <h3 style="margin:0 0 8px">Your sync key</h3>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 12px">On your <b>other</b> device, open this app → Stats → <b>Connect a device</b>, then paste this key. That device will pull your progress and stay synced automatically.</p>
+    <input id="ckey" readonly value="${id}" style="width:100%;font-size:14px;font-family:monospace;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--ink);box-sizing:border-box">
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn primary" onclick="const t=document.getElementById('ckey');t.select();navigator.clipboard&&navigator.clipboard.writeText(t.value).then(()=>this.textContent='✓ Copied!').catch(()=>{document.execCommand('copy');this.textContent='✓ Copied!'})">Copy key</button>
+      <button class="btn" onclick="this.closest('[style*=fixed]').remove()">Close</button>
+    </div>
+    <p style="font-size:11.5px;color:var(--ink-faint);margin:12px 0 0">Anyone with this key can read/write this progress, so keep it to yourself. It's tied to a free public store, not an account.</p>
+  </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener("click",e=>{if(e.target===modal)modal.remove();});
+};
+window.connectDevice=()=>{
+  const modal=document.createElement("div");
+  modal.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
+  modal.innerHTML=`<div style="background:var(--bg-card);border-radius:14px;padding:20px;max-width:460px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.4)">
+    <h3 style="margin:0 0 8px">Connect a device</h3>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 12px">Paste the sync key from the device that already has your progress. This device will pull that progress (replacing what's here) and stay synced.</p>
+    <input id="ckin" placeholder="Paste sync key…" style="width:100%;font-size:14px;font-family:monospace;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--ink);box-sizing:border-box">
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn primary" onclick="const v=document.getElementById('ckin').value;this.textContent='Connecting…';cloudConnect(v).then(ok=>{if(ok)this.closest('[style*=fixed]').remove();else this.textContent='Connect & sync'})">Connect & sync</button>
+      <button class="btn" onclick="this.closest('[style*=fixed]').remove()">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener("click",e=>{if(e.target===modal)modal.remove();});
+};
 function backupCard(){
-  return `<div class="card"><h3 style="margin-top:0">Sync between devices</h3>
-  <p style="font-size:13.5px;color:var(--ink-soft)">Progress lives in this browser — not the file. Use a sync code to carry everything (days, answers, streak, exam scores) to your Mac, PC, or phone without cables or accounts.</p>
+  const on=!!getSyncId();
+  return `<div class="card"><h3 style="margin-top:0">Cloud sync ${on?'<span style="font-size:12px;color:var(--teal-deep,#2E9E6B);font-weight:600">● ON</span>':''}</h3>
+  <p style="font-size:13.5px;color:var(--ink-soft)">Keep your Mac, PC, and phone in sync automatically — days, answers, streak, and exam scores. ${on?'This device is syncing in the background every time you make progress.':'Turn it on once, copy the key to your other devices, and it just works. Free, no account.'}</p>
   <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-    <button class="btn primary" onclick="showSyncCode()">📋 Get sync code</button>
-    <button class="btn" onclick="applySyncCode()">📥 Apply sync code</button>
+    ${on
+      ? `<button class="btn primary" onclick="showCloudKey()">📋 Show my sync key</button>
+         <button class="btn" onclick="connectDevice()">🔗 Connect this to another key</button>
+         <button class="btn" onclick="cloudDisable()">⏻ Turn off</button>`
+      : `<button class="btn primary" onclick="this.textContent='Setting up…';cloudEnable().then(id=>{if(id)showCloudKey()})">☁ Turn on cloud sync</button>
+         <button class="btn" onclick="connectDevice()">🔗 I already have a sync key</button>`}
   </div>
-  <p style="font-size:12px;color:var(--ink-faint);margin:10px 0 0">Also: <button class="btn" style="font-size:12px;padding:3px 8px" onclick="exportProgress()">⬇ Export file</button> <button class="btn" style="font-size:12px;padding:3px 8px;margin-left:4px" onclick="importProgress()">⬆ Import file</button></p>
+  <p style="font-size:12px;color:var(--ink-faint);margin:12px 0 0">Offline backup: <button class="btn" style="font-size:12px;padding:3px 8px" onclick="exportProgress()">⬇ Export file</button> <button class="btn" style="font-size:12px;padding:3px 8px;margin-left:4px" onclick="importProgress()">⬆ Import file</button> <button class="btn" style="font-size:12px;padding:3px 8px;margin-left:4px" onclick="showSyncCode()">📋 Manual code</button></p>
   </div>`;
 }
 // surface it on Stats (desktop + mobile) and More (mobile)
